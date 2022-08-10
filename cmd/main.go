@@ -13,7 +13,7 @@ type VarAccessInfo struct {
 	FuncID  string
 	BlockID int
 	Pos     int
-	Name    string
+	ID      string
 	Read    bool
 	Write   bool
 	LockSet map[string]bool
@@ -33,21 +33,21 @@ var globalVarMap = make(map[string]string)
 var goRoutineMap = make(map[string]bool)
 var goRoutineCreatorMap = make(map[string]*GoRoutineCreator)
 
-func SearchVarName(instrName string, varMap map[string]string) string {
+func SearchVarName(varAccessID string, varMap map[string]string) string {
 	for {
-		newInstrName, ok := varMap[instrName]
+		newVarAccessID, ok := varMap[varAccessID]
 		if !ok {
 			break
 		}
 
-		if newInstrName == "" {
+		if newVarAccessID == "" {
 			break
 		}
 
-		instrName = newInstrName
+		varAccessID = newVarAccessID
 	}
 
-	return instrName
+	return varAccessID
 }
 
 func IsGoRoutine(fullFuncID string, goRoutineMap map[string]bool) bool {
@@ -63,20 +63,44 @@ func CopyLockSet(lockSet map[string]bool) map[string]bool {
 	return lockSetCopy
 }
 
-func HasVarDataRace(varInfo, sharedVarInfo *VarAccessInfo) bool {
-	varFuncID := fmt.Sprintf("%s.%s", varInfo.PkgID, varInfo.FuncID)
-	sharedVarFuncID := fmt.Sprintf("%s.%s", sharedVarInfo.PkgID, sharedVarInfo.FuncID)
+func HasVarDataRace(varAccessInfo, sharedVarAccessInfo *VarAccessInfo) bool {
+	varAccessFuncID := fmt.Sprintf("%s.%s", varAccessInfo.PkgID, varAccessInfo.FuncID)
+	sharedVarAccessFuncID := fmt.Sprintf("%s.%s", sharedVarAccessInfo.PkgID, sharedVarAccessInfo.FuncID)
 
-	if varFuncID == sharedVarFuncID {
+	if varAccessFuncID == sharedVarAccessFuncID {
 		return false
 	}
 
-	if !IsGoRoutine(varFuncID, goRoutineMap) && !IsGoRoutine(sharedVarFuncID, goRoutineMap) {
+	isVarAccessFuncGR := IsGoRoutine(varAccessFuncID, goRoutineMap)
+	isSharedVarAccessFuncGR := IsGoRoutine(sharedVarAccessFuncID, goRoutineMap)
+
+	if !isVarAccessFuncGR && !isSharedVarAccessFuncGR {
 		return false
 	}
 
-	for lockID := range varInfo.LockSet {
-		if _, ok := sharedVarInfo.LockSet[lockID]; ok {
+	if isVarAccessFuncGR {
+		if varAccessFuncCreator, ok := goRoutineCreatorMap[varAccessFuncID]; ok {
+			varAccessFuncCreatorFuncID := fmt.Sprintf("%s.%s", varAccessFuncCreator.PkgID, varAccessFuncCreator.FuncID)
+			if varAccessFuncCreatorFuncID == sharedVarAccessFuncID {
+				if sharedVarAccessInfo.Pos < varAccessFuncCreator.Pos {
+					return false
+				}
+			}
+		}
+	}
+	if isSharedVarAccessFuncGR {
+		if sharedVarAccessFuncCreator, ok := goRoutineCreatorMap[sharedVarAccessFuncID]; ok {
+			shareVarAccessFCreatorFID := fmt.Sprintf("%s.%s", sharedVarAccessFuncCreator.PkgID, sharedVarAccessFuncCreator.FuncID)
+			if shareVarAccessFCreatorFID == varAccessFuncID {
+				if varAccessInfo.Pos < sharedVarAccessFuncCreator.Pos {
+					return false
+				}
+			}
+		}
+	}
+
+	for lockID := range varAccessInfo.LockSet {
+		if _, ok := sharedVarAccessInfo.LockSet[lockID]; ok {
 			return false
 		}
 	}
@@ -84,18 +108,18 @@ func HasVarDataRace(varInfo, sharedVarInfo *VarAccessInfo) bool {
 	return true
 }
 
-func ReportPotentialDataRace(varInfo, sharedVar *VarAccessInfo) {
+func ReportPotentialDataRace(varAccessInfo, sharedVarAccess *VarAccessInfo) {
 	fmt.Println("Potential data race:")
-	fmt.Println("Var Name:")
-	fmt.Println(varInfo.Name)
-	fmt.Println("Local Pos:")
-	fmt.Printf("%s.%s.%d.%d\n", varInfo.PkgID, varInfo.FuncID, varInfo.BlockID, varInfo.Instr.Pos())
-	fmt.Println("Local Instr:")
-	fmt.Println(varInfo.Instr.String())
-	fmt.Println("Target Pos:")
-	fmt.Printf("%s.%s.%d.%d\n", sharedVar.PkgID, sharedVar.FuncID, sharedVar.BlockID, sharedVar.Instr.Pos())
-	fmt.Println("Target Instr:")
-	fmt.Println(sharedVar.Instr.String())
+	fmt.Println("Var ID:")
+	fmt.Println(varAccessInfo.ID)
+	fmt.Println("Local Access Pos:")
+	fmt.Printf("%s.%s.%d.%d\n", varAccessInfo.PkgID, varAccessInfo.FuncID, varAccessInfo.BlockID, varAccessInfo.Instr.Pos())
+	fmt.Println("Local Access Instr:")
+	fmt.Println(varAccessInfo.Instr.String())
+	fmt.Println("Target Access Pos:")
+	fmt.Printf("%s.%s.%d.%d\n", sharedVarAccess.PkgID, sharedVarAccess.FuncID, sharedVarAccess.BlockID, sharedVarAccess.Instr.Pos())
+	fmt.Println("Target Access Instr:")
+	fmt.Println(sharedVarAccess.Instr.String())
 	fmt.Println()
 }
 
@@ -221,7 +245,7 @@ func main() {
 						FuncID:  funcID,
 						BlockID: blockID,
 						Pos:     int(storeInstr.Pos()),
-						Name:    varID,
+						ID:      varID,
 						Write:   true,
 						LockSet: CopyLockSet(lockSet),
 						Instr:   instr,
@@ -248,7 +272,7 @@ func main() {
 								FuncID:  funcID,
 								BlockID: blockID,
 								Pos:     int(unOpInstr.Pos()),
-								Name:    varID,
+								ID:      varID,
 								Write:   true,
 								LockSet: CopyLockSet(lockSet),
 								Instr:   instr,

@@ -13,9 +13,7 @@ func main() {
 	var wg sync.WaitGroup
 	var l sync.Mutex
 
-	l.Lock()
 	i := 1
-	l.Unlock()
 
 	wg.Add(1)
 	go func() {
@@ -26,11 +24,9 @@ func main() {
 		l.Unlock()
 	}()
 
-	l.Lock()
 	Foo()
 	i = i + 2
 	fmt.Println(i)
-	l.Unlock()
 
 	wg.Wait()
 }
